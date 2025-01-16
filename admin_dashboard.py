@@ -42,26 +42,7 @@ def render_page():
       num_users = 0
     st.write(f"Number of Users: {num_users}")
 
-    # --- Teacher Subject Expertise Visualization ---
-    st.subheader("Teacher Subject Expertise")
 
-    teachers = fetch_data("SELECT subject_expertise FROM users WHERE role = 'teacher'")
-    if teachers:
-      subject_expertise_counts = {}
-      for teacher in teachers:
-        subjects = teacher[0].split(",") if teacher[0] else []
-        for subject in subjects:
-          subject = subject.strip()
-          subject_expertise_counts[subject] = subject_expertise_counts.get(subject, 0) + 1
-
-      if subject_expertise_counts:
-          subject_df = pd.DataFrame(list(subject_expertise_counts.items()), columns=['Subject', 'Count'])
-          fig = px.bar(subject_df, x='Subject', y='Count', title='Number of Teachers per Subject')
-          st.plotly_chart(fig)
-      else:
-          st.write("No subject expertise data found for teachers.")
-    else:
-        st.write("No teacher data available.")
 
     # --- Student Data Table ---
     st.subheader("Student Data")

@@ -1,11 +1,15 @@
 import streamlit as st
-from database import fetch_one  # Import functions from database.py
+from database import fetch_one, fetch_data  # Import functions from database.py
+import hashlib
 import school_setup
 import admin_dashboard
 import manage_teachers
 import manage_users
 import manage_subjects
 import timetable_management
+import teacher_dashboard
+import leave_management
+import timetable
 
 # --- Helper Functions ---
 def hash_password(password):
@@ -19,7 +23,8 @@ def verify_password(input_password, hashed_password):
 
 # --- Session State Initialisation ---
 if "user" not in st.session_state:
-    st.session_state["user"] = None
+     st.session_state["user"] = None # initialize the user key for the session
+
 
 # --- Page Setup ---
 st.set_page_config(
@@ -36,11 +41,11 @@ def login_page():
 
     if st.button("Login"):
         if username and password:
-           user = fetch_one("SELECT user_id,username, password_hash, role FROM users WHERE username = ?", (username,))
+           user = fetch_one("SELECT user_id,username, password_hash, role, name FROM users WHERE username = ?", (username,))
            if user and password == user[2]:
               st.session_state["user"] = user
               st.success("Logged in successfully")
-              st.rerun()
+              st.rerun() # add rerun after setting the user value
            else:
                st.error("Invalid Username or Password")
         else:
@@ -56,9 +61,9 @@ else:
     # --- Navigation Bar ---
     st.sidebar.title("Navigation")
     if user[3] == "admin":
-       page = st.sidebar.radio("Go to", ["Admin Dashboard","Manage Teachers","Manage Users","School Details","Manage Subjects and Grades", "Timetable Management"])
+       page = st.sidebar.radio("Go to", ["Admin Dashboard","Manage Teachers","Manage Users","School Details","Manage Subjects and Grades", "Timetable Management","Current Timetable","Leave Management"])
     else:
-        page = st.sidebar.radio("Go to", ["Teacher Dashboard", "Teacher Profile"])
+        page = st.sidebar.radio("Go to", ["Teacher Dashboard", "Teacher Profile", "Teacher Schedule","Apply Leave"])
 
     if st.sidebar.button("Logout"):
        st.session_state["user"] = None
@@ -78,10 +83,16 @@ else:
             manage_subjects.render_page() #render manage subjects and grades page
        elif page == "Timetable Management":
             timetable_management.render_page() #render the timetable management page
+       elif page == "Current Timetable":
+            timetable.render_page()
+       elif page == "Leave Management":
+            leave_management.render_page()
     elif user[3] == "teacher": # Check for Teacher
       if page == "Teacher Dashboard":
-         st.title("Teacher Dashboard")
-         st.write("View your schedule and manage your profile here.")
+         teacher_dashboard.render_page(user)
       elif page == "Teacher Profile":
-            st.title("Teacher Profile")
-            st.write("Here you can see your profile")
+         teacher_dashboard.render_profile_page(user)
+      elif page == "Teacher Schedule":
+           teacher_dashboard.render_schedule_page(user)
+      elif page == "Apply Leave":
+          teacher_dashboard.render_leave_page(user)
