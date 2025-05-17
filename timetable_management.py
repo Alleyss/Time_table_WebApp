@@ -133,7 +133,7 @@ def store_timetable_to_db(timetable_df, grade_name, division):
         return
     grade_id = grade_data[0]
 
-
+    delete_data("timetable", "grade_id = ? AND division = ?", (grade_id, division))
     day_map = {
         'Monday': 0,
         'Tuesday': 1,

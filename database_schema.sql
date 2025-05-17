@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS timetable (
      FOREIGN KEY (teacher_id) REFERENCES users(user_id)
 );
 
-CREATE TABLE leave_requests (
+CREATE TABLE IF NOT EXISTS leave_requests (
     leave_id INTEGER PRIMARY KEY AUTOINCREMENT,
     teacher_id INTEGER,
     start_date DATE NOT NULL,

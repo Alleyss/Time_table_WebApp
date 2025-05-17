@@ -1,7 +1,7 @@
 import streamlit as st
-from database import fetch_data,update_data,fetch_one
+from database import fetch_data, update_data, fetch_one
 import datetime
-from gemini_ai import generate_substitute_timetable_llm,apply_substitute_timetable
+from gemini_ai import generate_substitute_timetable_llm, apply_substitute_timetable
 import pandas as pd
 
 def render_page():
@@ -25,14 +25,13 @@ def render_page():
         st.dataframe(pd.DataFrame(df_data))
 
         st.subheader("Manage Leave Requests")
-        selected_leave_id = st.selectbox("Select Leave Request to Manage", [req[0] for req in leave_requests ], index=None) # Show only pending requests
+        pending_requests = [req for req in leave_requests if req[5] == 'Pending']
+        selected_leave_id = st.selectbox("Select Pending Leave Request to Manage", [req[0] for req in pending_requests] if pending_requests else [], index=None)
 
         if selected_leave_id:
             leave_details = fetch_one("SELECT lr.start_date, lr.end_date, lr.teacher_id FROM leave_requests lr WHERE lr.leave_id = ?", (selected_leave_id,))
             if leave_details:
                 start_date_str, end_date_str, absent_teacher_id = leave_details
-                start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-                end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
                 col1, col2, col3 = st.columns(3)
                 if col1.button("Approve"):
@@ -56,4 +55,4 @@ def render_page():
                         st.rerun()
 
     else:
-        st.info("No pending leave requests found.")
+        st.info("No leave requests found.")

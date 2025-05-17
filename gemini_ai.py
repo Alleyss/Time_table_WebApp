@@ -1,16 +1,15 @@
 import google.generativeai as genai
 import streamlit as st
-from database import fetch_data, fetch_one,update_data
+from database import fetch_data, fetch_one, update_data
 import json
 import re
 import datetime
-
 
 # Set your API key
 GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=GOOGLE_API_KEY)
 
-def generate_timetable_prompt(grade_name, selected_division,time_slots):
+def generate_timetable_prompt(grade_name, selected_division, time_slots):
     """Generates a prompt for the gemini api to generate the time table"""
     # Fetch teacher data
     teachers = fetch_data("SELECT u.user_id, u.name, sub.subject_name, u.availability FROM users u INNER JOIN subjects sub ON u.subject_id = sub.subject_id  WHERE role = 'teacher'")
@@ -18,6 +17,8 @@ def generate_timetable_prompt(grade_name, selected_division,time_slots):
     school_details = fetch_one("SELECT session_duration_minutes, break_duration_minutes FROM schools")
     days_of_week = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
+    # Fetch existing timetable data
+    existing_timetable = fetch_data("SELECT day_of_week, start_time, teacher_id FROM timetable")
 
     prompt = f"""Create a timetable for grade {grade_name} - division {selected_division} from Monday to Friday.
     The school sessions start at 9:00 AM and end at 3:15 PM.
@@ -29,51 +30,58 @@ def generate_timetable_prompt(grade_name, selected_division,time_slots):
     for teacher in teachers:
         prompt += f"""Teacher id : {teacher[0]}, name: {teacher[1]}, subject : {teacher[2]}, available time: {teacher[3]}. """
 
-    prompt+=f""" The list of subjects ids are :"""
+    prompt += f""" The list of subjects ids are :"""
     for subject in subjects:
-        prompt+= f"""{subject[0]}:{subject[1]}, """
-    prompt+=f"""\nPlease provide the timetable in JSON format with all the sessions, and it should have keys for "day", "start_time", "subject" which should be a subject id and "teacher" which should be a teacher id. The JSON format should be a list of dictionary where each item has a `day`, which represents the day of the week and `sessions` which has a list of dictionaries, each containing `start_time`, `subject`, and `teacher` information. Also the `start_time` should exactly match these time slots: {", ".join(time_slots)}. The JSON list should only contain 5 days, starting with monday. Please do not include any text other than JSON in your output."""
+        prompt += f"""{subject[0]}:{subject[1]}, """
+
+    if existing_timetable:
+        prompt += """\nConsider the following existing timetable to avoid assigning the same teacher to multiple classes at the same time:"""
+        for entry in existing_timetable:
+            day_index = entry[0] - 1  # Adjusting day_of_week (1-7) to list index (0-4)
+            if 0 <= day_index < len(days_of_week):
+                prompt += f""" On {days_of_week[day_index]}, at {entry[1]}, teacher id {entry[2]} is teaching a class. """
+
+    prompt += f"""\nPlease provide the timetable in JSON format with all the sessions, and it should have keys for "day", "start_time", "subject" which should be a subject id and "teacher" which should be a teacher id. The JSON format should be a list of dictionary where each item has a `day`, which represents the day of the week and `sessions` which has a list of dictionaries, each containing `start_time`, `subject`, and `teacher` information. Also the `start_time` should exactly match these time slots: {", ".join(time_slots)}. The JSON list should only contain 5 days, starting with monday. **Crucially, ensure that no teacher is assigned to more than one class at the same time on the same day. Refer to the existing timetable information to avoid double-booking teachers.** Please do not include any text other than JSON in your output."""
     return prompt
 
 def send_prompt_to_gemini(prompt):
     """Sends the prompt to gemini api and returns the response"""
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     try:
-         response = model.generate_content(prompt)
-         return response.text
+        response = model.generate_content(prompt)
+        return response.text
     except Exception as e:
-       return None
+        return None
 
 def generate_timetable_json(prompt):
-     """Sends the prompt to gemini, and tries to get a json format output.
-         If there are any errors, it logs it and returns None
-     """
-     response = send_prompt_to_gemini(prompt)
-     if response:
+    """Sends the prompt to gemini, and tries to get a json format output.
+        If there are any errors, it logs it and returns None
+    """
+    response = send_prompt_to_gemini(prompt)
+    if response:
         try:
             # Extract json like block from the entire response using a regex
-            json_match = re.search(r'(\[.*\])',response,re.DOTALL) # added a multi line matching, and uses regex group to extract the value from group.
+            json_match = re.search(r'(\[.*\])', response, re.DOTALL)  # added a multi line matching, and uses regex group to extract the value from group.
             if json_match:
-              json_string = json_match.group(1)
-              timetable_data = json.loads(json_string.strip())
-              if isinstance(timetable_data, list):
-                  return timetable_data
-              else:
-                st.error(f"Gemini response is not in expected list format")
+                json_string = json_match.group(1)
+                timetable_data = json.loads(json_string.strip())
+                if isinstance(timetable_data, list):
+                    return timetable_data
+                else:
+                    st.error(f"Gemini response is not in expected list format")
+                    st.error(f"Actual Response from Gemini: {response}")
+                    return None
+            else:
+                st.error("Could not extract json from gemini response. Please try again")
                 st.error(f"Actual Response from Gemini: {response}")
                 return None
-            else:
-              st.error("Could not extract json from gemini response. Please try again")
-              st.error(f"Actual Response from Gemini: {response}")
-              return None
-        except Exception as e:
+        except json.JSONDecodeError as e:
             st.error(f"Could not parse the json : {e}")
             st.error(f"Actual Response from Gemini: {response}")
             return None
-     else:
+    else:
         st.error("Did not get any response from gemini")
         return None
-
 
 def apply_substitute_timetable(substitute_timetable_json, original_teacher_id):
     """Applies the substitute timetable generated by the LLM."""
@@ -82,25 +90,38 @@ def apply_substitute_timetable(substitute_timetable_json, original_teacher_id):
         return
 
     for entry in substitute_timetable_json:
-        day_index = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(entry['day_of_week'])
-        
-        # Fetch subject ID and grade ID
-        subject_data = fetch_one("SELECT subject_id FROM subjects WHERE subject_name = ?", (entry['subject_name'],))
-        grade_data = fetch_one("SELECT grade_id FROM grades WHERE grade_name = ?", (entry['grade_name'],))
+        try:
+            day_index = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(entry['day_of_week'])
 
-        if subject_data and grade_data:
-            subject_id = subject_data[0]
-            grade_id = grade_data[0]
+            # Fetch subject ID and grade ID
+            subject_data = fetch_one("SELECT subject_id FROM subjects WHERE subject_name = ?", (entry['subject_name'],))
+            grade_data = fetch_one("SELECT grade_id FROM grades WHERE grade_name = ?", (entry['grade_name'],))
 
-            # Update the timetable
-            update_data(
-                "timetable",
-                {"teacher_id": entry['substitute_teacher_id']},
-                "day_of_week = ? AND start_time = ? AND end_time = ? AND grade_id = ? AND division = ? AND teacher_id = ?",
-                (day_index, entry['start_time'], entry['end_time'], grade_id, entry['division'], original_teacher_id)
-            )
-        else:
-            st.error(f"Subject or Grade not found for {entry}")
+            if subject_data and grade_data:
+                subject_id = subject_data[0]
+                grade_id = grade_data[0]
+
+                # Update the timetable
+                updated_rows = update_data(
+                    "timetable",
+                    {"teacher_id": entry['substitute_teacher_id']},
+                    "day_of_week = ? AND start_time = ? AND end_time = ? AND grade_id = ? AND division = ? AND teacher_id = ?",
+                    (day_index, entry['start_time'], entry['end_time'], grade_id, entry['division'], original_teacher_id)
+                )
+
+                if updated_rows > 0:
+                    st.success(f"Successfully assigned substitute teacher {entry.get('substitute_teacher_id', 'Unknown')} for {entry['day_of_week']} at {entry['start_time']} for Grade {entry['grade_name']} - Division {entry['division']}.")
+                else:
+                    st.error(f"Failed to update timetable for {entry['day_of_week']} at {entry['start_time']} for Grade {entry['grade_name']} - Division {entry['division']}. Check if the original entry exists.")
+                    # Add more debugging info if needed, like printing the query parameters
+                    st.write(f"Update parameters: day_index={day_index}, start_time={entry['start_time']}, end_time={entry['end_time']}, grade_id={grade_id}, division={entry['division']}, original_teacher_id={original_teacher_id}")
+
+            else:
+                st.error(f"Subject or Grade not found for {entry}")
+        except ValueError as e:
+            st.error(f"Error processing day of week: {e}. Ensure 'day_of_week' in the JSON is a valid weekday name (e.g., 'Monday').")
+        except Exception as e:
+            st.error(f"An unexpected error occurred while applying substitute timetable: {e}")
 
 def generate_substitute_timetable_llm(leave_id):
     leave_details = fetch_one("SELECT start_date, end_date, teacher_id FROM leave_requests WHERE leave_id = ?", (leave_id,))
@@ -118,25 +139,40 @@ def generate_substitute_timetable_llm(leave_id):
         return None
     absent_teacher_name = absent_teacher_data[0]
 
-    absent_teacher_schedule = fetch_data(
-        "SELECT t.day_of_week, t.start_time, t.end_time, s.subject_name, g.grade_name, t.division "
-        "FROM timetable t "
-        "JOIN subjects s ON t.subject_id = s.subject_id "
-        "JOIN grades g ON t.grade_id = g.grade_id "
-        "WHERE t.teacher_id = ? AND t.day_of_week >= ? AND t.day_of_week <= ?",
-        (absent_teacher_id, start_date.weekday(), end_date.weekday())
-    )
+    substitute_slots = []
+    current_date = start_date
+    while current_date <= end_date:
+        day_of_week_num = current_date.weekday()  # Monday is 0, Sunday is 6
+        if day_of_week_num < 5:  # Consider only weekdays for school
+            day_of_week_str = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][day_of_week_num]
+            daily_schedule = fetch_data(
+                "SELECT t.start_time, t.end_time, s.subject_name, g.grade_name, t.division "
+                "FROM timetable t "
+                "JOIN subjects s ON t.subject_id = s.subject_id "
+                "JOIN grades g ON t.grade_id = g.grade_id "
+                "WHERE t.teacher_id = ? AND t.day_of_week = ?",
+                (absent_teacher_id, day_of_week_num)
+            )
+            for start_time, end_time, subject_name, grade_name, division in daily_schedule:
+                substitute_slots.append({
+                    "day_of_week": day_of_week_str,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "subject_name": subject_name,
+                    "grade_name": grade_name,
+                    "division": division
+                })
+        current_date += datetime.timedelta(days=1)
 
-    if not absent_teacher_schedule:
+    if not substitute_slots:
         st.info("No classes scheduled for the teacher during the leave period.")
         return None
 
-    prompt = f"""Generate a substitute timetable for the classes of teacher '{absent_teacher_name}' who is on leave from {start_date_str} to {end_date_str}. 
+    prompt = f"""Generate a substitute timetable for the classes of teacher '{absent_teacher_name}' who is on leave from {start_date_str} to {end_date_str}.
     Consider the following schedule of the absent teacher:
     """
-    for item in absent_teacher_schedule:
-        day_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][item[0]]
-        prompt += f"- {day_of_week}, Time: {item[1]}-{item[2]}, Subject: {item[3]}, Grade: {item[4]}, Division: {item[5]}\n"
+    for slot in substitute_slots:
+        prompt += f"- {slot['day_of_week']}, Time: {slot['start_time']}-{slot['end_time']}, Subject: {slot['subject_name']}, Grade: {slot['grade_name']}, Division: {slot['division']}\n"
 
     prompt += """
     When assigning substitutes, prioritize the following:
@@ -144,13 +180,13 @@ def generate_substitute_timetable_llm(leave_id):
     2. Teachers who are available at the given time slot.
     3. Assign 'Study Hour' if no other teacher is available.
 
-    Provide the substitute timetable in JSON format. 
-    The JSON should be a list of dictionaries, where each dictionary represents a substituted class 
-    and has the following keys: "day_of_week" (e.g., "Monday"), "start_time" (e.g., "09:00"), 
+    Provide the substitute timetable in JSON format.
+    The JSON should be a list of dictionaries, where each dictionary represents a substituted class
+    and has the following keys: "day_of_week" (e.g., "Monday"), "start_time" (e.g., "09:00"),
     "end_time" (e.g., "09:45"), "grade_name", "division", "subject_name", "substitute_teacher_id".
-    Only include the substitute timetable in the JSON response. Do not include any other text.
+    Only include the substitute timetable in the JSON response. **Ensure that no teacher is assigned to more than one class at the same time.** Do not include any other text.
     """
-    
+
     llm_response = send_prompt_to_gemini(prompt)
     if llm_response:
         try:
